@@ -1,0 +1,108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FC Barcelona — 2025/26 Season</title>
+    <link rel="icon" href="https://crests.football-data.org/81.svg">
+    <link rel="stylesheet" href="/static/css/style.css">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+</head>
+<body>
+    <header>
+        <div class="header-inner">
+            <img src="https://crests.football-data.org/81.svg" alt="Barça crest" class="crest">
+            <div>
+                <h1>FC Barcelona</h1>
+                <p class="subtitle">2025/26 Season Dashboard</p>
+            </div>
+        </div>
+        <div class="header-meta">
+            <span id="update-time">Loading…</span>
+            <span id="live-dot" class="live-dot hidden" title="Live match in progress"></span>
+        </div>
+    </header>
+
+    <main>
+        <!-- Stats Bar -->
+        <section class="stats-bar" id="stats-bar">
+            <div class="stat-card">
+                <span class="stat-value" id="stat-played">-</span>
+                <span class="stat-label">Played</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-value" id="stat-wins">-</span>
+                <span class="stat-label">Wins</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-value" id="stat-draws">-</span>
+                <span class="stat-label">Draws</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-value" id="stat-losses">-</span>
+                <span class="stat-label">Losses</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-value" id="stat-gf">-</span>
+                <span class="stat-label">Goals For</span>
+            </div>
+            <div class="stat-card">
+                <span class="stat-value" id="stat-ga">-</span>
+                <span class="stat-label">Goals Against</span>
+            </div>
+            <div class="stat-card highlight">
+                <span class="stat-value" id="stat-points">-</span>
+                <span class="stat-label">Points</span>
+            </div>
+        </section>
+
+        <!-- Error banner -->
+        <div id="error-banner" class="error-banner hidden"></div>
+
+        <!-- Tabs -->
+        <nav class="tabs">
+            <button class="tab active" data-tab="all">All Matches</button>
+            <button class="tab" data-tab="live">LIVE <span id="live-count" class="badge hidden">0</span></button>
+            <button class="tab" data-tab="finished">Past</button>
+            <button class="tab" data-tab="upcoming">Upcoming</button>
+            <button class="tab" data-tab="charts">Charts</button>
+        </nav>
+
+        <!-- Tab content: All / Live / Finished / Upcoming -->
+        <section class="tab-content" id="tab-all"></section>
+        <section class="tab-content hidden" id="tab-live"></section>
+        <section class="tab-content hidden" id="tab-finished"></section>
+        <section class="tab-content hidden" id="tab-upcoming"></section>
+
+        <!-- Charts tab -->
+        <section class="tab-content hidden" id="tab-charts">
+            <div class="charts-grid">
+                <div class="chart-box">
+                    <h3>Results Breakdown</h3>
+                    <canvas id="chart-wdl"></canvas>
+                </div>
+                <div class="chart-box">
+                    <h3>Points Progression</h3>
+                    <canvas id="chart-points"></canvas>
+                </div>
+                <div class="chart-box">
+                    <h3>Goals Scored per Match</h3>
+                    <canvas id="chart-goals"></canvas>
+                </div>
+                <div class="chart-box">
+                    <h3>Competition Breakdown</h3>
+                    <canvas id="chart-competitions"></canvas>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <footer>
+        <p>Data via <a href="https://www.football-data.org/" target="_blank" rel="noopener">football-data.org</a>
+        &nbsp;|&nbsp; Auto-refreshes every 5 minutes &nbsp;|&nbsp;
+        <button id="btn-refresh" class="btn-link">↻ Refresh now</button></p>
+    </footer>
+
+    <script src="/static/js/app.js"></script>
+</body>
+</html>
