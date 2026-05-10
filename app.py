@@ -17,6 +17,7 @@ import transfer_news
 load_dotenv()
 
 app = Flask(__name__)
+app.config["SEND_FILE_MAX_AGE_DEFAULT"] = 0  # Disable static file caching
 
 # In-memory cache for fast API responses
 _cache: dict = {
