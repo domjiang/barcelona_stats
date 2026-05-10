@@ -228,38 +228,72 @@ function renderTimeline(m, isBarcaHome) {
         return ev.is_barca === isBarcaHome;
     }
 
-    // Build left/right timeline rows
-    let rows = "";
-    allEvents.forEach(ev => {
-        const onHome = isHomeEvent(ev);
-        const side = onHome ? "barca" : "opp";
+    // Insert time markers at 0', 45', 90', 105', 120'
+    function markerRow(label, cls) {
+        return `<div class="timeline-marker ${cls}"><span class="timeline-marker-label">${label}</span></div>`;
+    }
 
+    // Build rows with markers
+    let rows = markerRow("Kick-off", "marker-kickoff");
+    let lastMin = 0;
+    let hasExtraTime = false;
+    let hasPenaltyShootout = false;
+
+    function buildEventRow(ev, onHome) {
+        const side = onHome ? "barca" : "opp";
         if (ev.etype === "goal") {
             const isPen = ev.type === "PENALTY";
             const penaltyTag = isPen ? '<span class="timeline-penalty">(P)</span>' : "";
             const isBarcaGoal = ev.is_barca;
-            rows += `
-                <div class="timeline-event ${side} event-goal${isBarcaGoal ? "" : " opp-goal"}">
-                    <span class="timeline-icon"></span>
-                    <span class="timeline-text">
-                        <span class="timeline-minute">${ev.minute}</span>
-                        <span class="timeline-player">${escHtml(ev.scorer)}</span>${penaltyTag}
-                    </span>
-                </div>`;
+            return `<div class="timeline-event ${side} event-goal${isBarcaGoal ? "" : " opp-goal"}">
+                <span class="timeline-icon"></span>
+                <span class="timeline-text">
+                    <span class="timeline-minute">${ev.minute}</span>
+                    <span class="timeline-player">${escHtml(ev.scorer)}</span>${penaltyTag}
+                </span>
+            </div>`;
         } else {
             const isRed = ev.card === "RED";
             const cardIcon = isRed ? "" : "";
             const cardCls = isRed ? "event-card card-red" : "event-card";
-            rows += `
-                <div class="timeline-event ${side} ${cardCls}">
-                    <span class="timeline-icon">${cardIcon}</span>
-                    <span class="timeline-text">
-                        <span class="timeline-minute">${ev.minute}</span>
-                        <span class="timeline-player">${escHtml(ev.player)}</span>
-                    </span>
-                </div>`;
+            return `<div class="timeline-event ${side} ${cardCls}">
+                <span class="timeline-icon">${cardIcon}</span>
+                <span class="timeline-text">
+                    <span class="timeline-minute">${ev.minute}</span>
+                    <span class="timeline-player">${escHtml(ev.player)}</span>
+                </span>
+            </div>`;
         }
-    });
+    }
+
+    for (const ev of allEvents) {
+        const evMin = parseMinute(ev.minute);
+
+        // Insert HALF-TIME marker between first and second half
+        if (lastMin <= 45 && evMin >= 45 && evMin < 100) {
+            rows += markerRow("Half-time 45'", "marker-halftime");
+        }
+        // Insert FULL-TIME marker after regular time
+        if (lastMin <= 90 && evMin > 90 && evMin < 120) {
+            rows += markerRow("Full-time 90'", "marker-fulltime");
+            hasExtraTime = true;
+        }
+        // Insert EXTRA TIME markers
+        if (hasExtraTime && lastMin <= 105 && evMin >= 105) {
+            rows += markerRow("Extra Time 105'", "marker-extratime");
+        }
+
+        rows += buildEventRow(ev, isHomeEvent(ev));
+        lastMin = evMin;
+    }
+
+    // Add FULL-TIME marker at end if not already added
+    if (lastMin <= 90 && lastMin >= 45) {
+        rows += markerRow("Full-time 90'", "marker-fulltime");
+    }
+    if (hasExtraTime && lastMin < 120) {
+        rows += markerRow("Full-time 120'", "marker-fulltime");
+    }
 
     return `
         <div class="timeline-section">

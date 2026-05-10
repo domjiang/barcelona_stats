@@ -252,21 +252,25 @@ header h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: 0.5px; }
 
 .timeline-events {
     display: grid;
-    grid-template-columns: 1fr 2px 1fr;
+    grid-template-columns: 1fr 40px 1fr;
     gap: 0;
     align-items: start;
-}
-.timeline-events::before {
-    display: none; /* we use the middle column as line */
+    position: relative;
 }
 
-.timeline-line {
+/* Center line */
+.timeline-events::after {
+    content: "";
     grid-column: 2;
     grid-row: 1 / -1;
-    background: var(--surface2);
-    width: 2px;
+    width: 3px;
+    background: linear-gradient(to bottom,
+        transparent 0%,
+        var(--barca-gold) 5%,
+        var(--barca-gold) 95%,
+        transparent 100%);
+    border-radius: 2px;
     margin: 0 auto;
-    position: relative;
 }
 
 .timeline-event {
@@ -278,7 +282,7 @@ header h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: 0.5px; }
     position: relative;
 }
 
-/* Barcelona events — left column */
+/* Home events — left column */
 .timeline-event.barca {
     grid-column: 1;
     justify-content: flex-end;
@@ -287,12 +291,63 @@ header h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: 0.5px; }
 }
 .timeline-event.barca .timeline-text { text-align: right; }
 
-/* Opponent events — right column */
+/* Away events — right column */
 .timeline-event.opp {
     grid-column: 3;
     justify-content: flex-start;
     text-align: left;
     padding-left: 12px;
+}
+
+/* Time markers on center line */
+.timeline-marker {
+    grid-column: 1 / -1;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin: 4px 0;
+    padding: 2px 0;
+}
+.timeline-marker::before {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--surface2);
+}
+.timeline-marker::after {
+    content: "";
+    flex: 1;
+    height: 1px;
+    background: var(--surface2);
+}
+.timeline-marker-label {
+    padding: 3px 10px;
+    border-radius: 10px;
+    font-size: 0.65rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    white-space: nowrap;
+    border: 1px solid var(--surface2);
+}
+.marker-kickoff .timeline-marker-label {
+    background: rgba(255,255,255,0.08);
+    color: var(--text-muted);
+}
+.marker-halftime .timeline-marker-label {
+    background: rgba(0,77,152,0.2);
+    color: var(--barca-blue);
+    border-color: var(--barca-blue);
+}
+.marker-fulltime .timeline-marker-label {
+    background: rgba(165,0,68,0.15);
+    color: var(--barca-red);
+    border-color: var(--barca-red);
+}
+.marker-extratime .timeline-marker-label {
+    background: rgba(205,176,52,0.15);
+    color: var(--barca-gold);
+    border-color: var(--barca-gold);
 }
 
 .timeline-icon {
