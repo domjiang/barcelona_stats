@@ -3,7 +3,6 @@
 const REFRESH_MS = 5 * 60 * 1000;
 let charts = {};
 let currentData = null;
-let stadiumCache = {};
 
 // ===== Init =====
 document.addEventListener("DOMContentLoaded", () => {
@@ -90,8 +89,6 @@ function render(data) {
     if (!document.getElementById("tab-charts").classList.contains("hidden")) renderCharts(data);
     if (!document.getElementById("tab-transfers").classList.contains("hidden")) loadTransfers();
 
-    // Load stadium images after DOM update
-    setTimeout(loadStadiumImages, 200);
 }
 
 // ===== Match list HTML =====
@@ -146,15 +143,16 @@ function renderMatchCard(m) {
     const venueName = m.venue || "";
     const venueText = venueName ? ` — ${venueName}` : "";
 
-    // Stadium image row
+    // Stadium image row (embedded from server)
     let stadiumRow = "";
     if (venueName) {
-        const safeName = venueName.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase();
+        const imgUrl = m.stadium_img || "";
+        const imgTag = imgUrl
+            ? `<img class="stadium-thumb" src="${escAttr(imgUrl)}" alt="${escAttr(venueName)}">`
+            : "";
         stadiumRow = `
             <div class="stadium-row">
-                <img class="stadium-thumb" data-stadium="${escAttr(venueName)}"
-                     src="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='80' height='50'><rect fill='%23222240' width='80' height='50'/></svg>"
-                     alt="${escAttr(venueName)}">
+                ${imgTag}
                 <span class="stadium-name">${escHtml(venueName)} ${venueBadge}</span>
             </div>`;
     }
@@ -203,27 +201,45 @@ function renderTimeline(m, isBarcaHome) {
     if (!hasEvents && hasFetched && !events.found) return '<div class="loading-events">No detailed events available.</div>';
     if (!hasEvents) return '<div class="loading-events">Loading…</div>';
 
-    const barcaTeamName = isBarcaHome ? m.home_team : m.away_team;
-    const oppTeamName = isBarcaHome ? m.away_team : m.home_team;
-
-    // Merge and sort events
+    // Merge and sort events by minute
     const allEvents = [
         ...goals.map(g => ({ ...g, etype: "goal" })),
         ...cards.map(c => ({ ...c, etype: "card" })),
     ];
     allEvents.sort((a, b) => parseMinute(a.minute) - parseMinute(b.minute));
 
+    // Determine which team each event belongs to
+    // is_barca from ESPN data tells us if it's a Barcelona event
+    // We need: HOME team events on LEFT, AWAY team events on RIGHT
+    // If Barca is home: barca events = left (home), opp events = right (away)
+    // If Barca is away: barca events = right (away), opp events = left (home)
+    const homeTeam = m.home_team;
+    const awayTeam = m.away_team;
+    // Determine which ESPN team name corresponds to home/away
+    function isHomeEvent(ev) {
+        // ev.team is the team name from ESPN (e.g., "Barcelona", "Real Madrid")
+        const evTeam = (ev.team || "").toLowerCase();
+        const homeName = homeTeam.toLowerCase();
+        // Try to match
+        if (ev.is_barca && isBarcaHome) return true;
+        if (ev.is_barca && !isBarcaHome) return false;
+        if (!ev.is_barca && isBarcaHome) return false;
+        if (!ev.is_barca && !isBarcaHome) return true;
+        return ev.is_barca === isBarcaHome;
+    }
+
     // Build left/right timeline rows
     let rows = "";
     allEvents.forEach(ev => {
-        const isBarca = ev.is_barca;
-        const side = isBarca ? "barca" : "opp";
+        const onHome = isHomeEvent(ev);
+        const side = onHome ? "barca" : "opp";
 
         if (ev.etype === "goal") {
             const isPen = ev.type === "PENALTY";
             const penaltyTag = isPen ? '<span class="timeline-penalty">(P)</span>' : "";
+            const isBarcaGoal = ev.is_barca;
             rows += `
-                <div class="timeline-event ${side} event-goal${isBarca ? "" : " opp-goal"}">
+                <div class="timeline-event ${side} event-goal${isBarcaGoal ? "" : " opp-goal"}">
                     <span class="timeline-icon"></span>
                     <span class="timeline-text">
                         <span class="timeline-minute">${ev.minute}</span>
@@ -248,9 +264,9 @@ function renderTimeline(m, isBarcaHome) {
     return `
         <div class="timeline-section">
             <div class="timeline-section-title">
-                <span style="color:var(--barca-blue)">${escHtml(barcaTeamName)}</span>
-                &nbsp;— Match Events —&nbsp;
-                <span style="color:var(--text-muted)">${escHtml(oppTeamName)}</span>
+                <span style="color:var(--barca-blue)">${escHtml(homeTeam)} [H]</span>
+                &nbsp;— Events —&nbsp;
+                <span style="color:var(--text-muted)">${escHtml(awayTeam)} [A]</span>
             </div>
             <div class="timeline-events">${rows}</div>
         </div>`;
@@ -305,36 +321,6 @@ async function fetchMatchEvents(card, matchId) {
     } catch {
         timeline.innerHTML = '<div class="loading-events">Failed to load.</div>';
     }
-}
-
-// ===== Stadium images =====
-function loadStadiumImages() {
-    const imgs = document.querySelectorAll("img.stadium-thumb[data-stadium]");
-    imgs.forEach(img => {
-        const name = img.dataset.stadium;
-        if (!name) return;
-        // Skip if already loaded (src is a real image, not the placeholder)
-        if (img.src && !img.src.startsWith("data:image")) return;
-
-        if (stadiumCache[name]) {
-            img.src = stadiumCache[name];
-            return;
-        }
-
-        fetchStadiumImage(img, name);
-    });
-}
-
-async function fetchStadiumImage(img, name) {
-    try {
-        const resp = await fetch(`/api/stadium-image?name=${encodeURIComponent(name)}`);
-        const sd = await resp.json();
-        if (sd.image_path) {
-            stadiumCache[name] = sd.image_path;
-            img.src = sd.image_path;
-            img.title = sd.attribution || "";
-        }
-    } catch { /* ignore */ }
 }
 
 // ===== Transfer News =====

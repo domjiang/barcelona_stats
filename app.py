@@ -259,9 +259,16 @@ def api_matches():
                 m["events"] = events.get(m["id"], {})
                 is_barca_home = m.get("home_team") in ("Barça", "Barcelona")
                 m["is_home"] = is_barca_home
-                # Venue: use static map (football-data.org free tier doesn't include venue)
+                # Venue + stadium image
                 home_team = m.get("home_team", "")
-                m["stadium_name"] = get_venue(home_team)
+                venue_name = get_venue(home_team)
+                m["stadium_name"] = venue_name
+                # Embed stadium image URL directly
+                if venue_name:
+                    cached = db.load_stadium(venue_name)
+                    m["stadium_img"] = cached["image_path"] if cached else ""
+                else:
+                    m["stadium_img"] = ""
                 result.append(m)
             return result
 
