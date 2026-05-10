@@ -43,6 +43,7 @@ def init_db():
             CREATE TABLE IF NOT EXISTS transfer_news (
                 id TEXT PRIMARY KEY,
                 title TEXT NOT NULL,
+                original_title TEXT DEFAULT '',
                 link TEXT NOT NULL,
                 source TEXT NOT NULL,
                 published TEXT,
@@ -53,6 +54,11 @@ def init_db():
             CREATE INDEX IF NOT EXISTS idx_matches_status ON matches(status);
             CREATE INDEX IF NOT EXISTS idx_transfer_category ON transfer_news(category);
         """)
+        # Migrations
+        try:
+            conn.execute("ALTER TABLE transfer_news ADD COLUMN original_title TEXT DEFAULT ''")
+        except sqlite3.OperationalError:
+            pass  # Column already exists
         conn.commit()
         conn.close()
 
@@ -174,9 +180,9 @@ def upsert_transfer_articles(articles: list[dict]):
         conn = _connect()
         for a in articles:
             conn.execute(
-                """INSERT OR REPLACE INTO transfer_news (id, title, link, source, published, category, players, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-                (a["id"], a["title"], a["link"], a["source"],
+                """INSERT OR REPLACE INTO transfer_news (id, title, original_title, link, source, published, category, players, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (a["id"], a["title"], a.get("original_title", ""), a["link"], a["source"],
                  a.get("published", ""), a.get("category", "rumor"),
                  ",".join(a.get("players", [])), now),
             )

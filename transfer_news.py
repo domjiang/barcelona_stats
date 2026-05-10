@@ -141,9 +141,9 @@ def fetch_transfer_news() -> list[dict]:
             category = _classify(text)
             players = _extract_players(f"{title} {desc}")
 
-            # Translate title to English if not already English
+            # Translate title to English (all RSS feeds are Spanish)
             display_title = title
-            if title and not _is_english(title):
+            if title:
                 translated = _translate_to_english(title)
                 if translated and translated != title:
                     display_title = translated

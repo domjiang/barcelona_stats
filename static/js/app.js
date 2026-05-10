@@ -42,6 +42,9 @@ function setupTabs() {
             const el = document.getElementById(target);
             if (el) el.classList.remove("hidden");
             if (tab.dataset.tab === "transfers") loadTransfers();
+            if (tab.dataset.tab === "charts" && currentData) {
+                setTimeout(() => renderCharts(currentData), 100);
+            }
         });
     });
 }
@@ -108,7 +111,7 @@ function renderMatchCard(m) {
 
     // Competition emblem
     const compEmblem = m.competition_emblem
-        ? `<img class="comp-emblem" src="${escAttr(m.competition_emblem)}" alt="" onerror="this.remove()">`
+        ? `<img class="comp-emblem" src="${escAttr(m.competition_emblem)}" alt="">`
         : "";
 
     // Result badge
@@ -143,14 +146,15 @@ function renderMatchCard(m) {
     const venueName = m.venue || "";
     const venueText = venueName ? ` — ${venueName}` : "";
 
-    // Stadium image row (home OR away — show opponent stadium too)
+    // Stadium image row
     let stadiumRow = "";
     if (venueName) {
         const safeName = venueName.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase();
         stadiumRow = `
             <div class="stadium-row">
-                <img class="stadium-thumb" data-stadium="${escAttr(venueName)}" data-stadium-id="${safeName}"
-                     src="" alt="" onerror="this.style.display='none'" style="display:none">
+                <img class="stadium-thumb" data-stadium="${escAttr(venueName)}"
+                     src="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' width='80' height='50'><rect fill='%23222240' width='80' height='50'/></svg>"
+                     alt="${escAttr(venueName)}">
                 <span class="stadium-name">${escHtml(venueName)} ${venueBadge}</span>
             </div>`;
     }
@@ -308,15 +312,15 @@ function loadStadiumImages() {
     const imgs = document.querySelectorAll("img.stadium-thumb[data-stadium]");
     imgs.forEach(img => {
         const name = img.dataset.stadium;
-        if (!name || img.src) return;
+        if (!name) return;
+        // Skip if already loaded (src is a real image, not the placeholder)
+        if (img.src && !img.src.startsWith("data:image")) return;
 
         if (stadiumCache[name]) {
             img.src = stadiumCache[name];
-            img.style.display = "";
             return;
         }
 
-        // Fetch from backend
         fetchStadiumImage(img, name);
     });
 }
@@ -328,7 +332,6 @@ async function fetchStadiumImage(img, name) {
         if (sd.image_path) {
             stadiumCache[name] = sd.image_path;
             img.src = sd.image_path;
-            img.style.display = "";
             img.title = sd.attribution || "";
         }
     } catch { /* ignore */ }

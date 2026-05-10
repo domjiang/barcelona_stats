@@ -335,6 +335,7 @@ def api_transfers():
             categories[cat].append({
                 "id": a["id"],
                 "title": a["title"],
+                "original_title": a.get("original_title", ""),
                 "link": a["link"],
                 "source": a["source"],
                 "published": a.get("published", ""),
