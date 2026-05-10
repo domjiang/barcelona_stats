@@ -9,6 +9,7 @@ from dotenv import load_dotenv
 
 from api_client import FootballDataAPI
 from espn_client import get_match_events
+from venues import get_venue
 import db
 import stadiums as stadium_module
 import transfer_news
@@ -256,10 +257,11 @@ def api_matches():
             for m in (matches or []):
                 m = dict(m)
                 m["events"] = events.get(m["id"], {})
-                # Determine home/away for Barcelona
                 is_barca_home = m.get("home_team") in ("Barça", "Barcelona")
                 m["is_home"] = is_barca_home
-                m["stadium_name"] = m.get("venue", "") if is_barca_home else ""
+                # Venue: use static map (football-data.org free tier doesn't include venue)
+                home_team = m.get("home_team", "")
+                m["stadium_name"] = get_venue(home_team)
                 result.append(m)
             return result
 
@@ -371,6 +373,44 @@ def api_transfer_refresh():
     return jsonify({"count": len(articles)})
 
 
-if __name__ == "__main__":
+def startup_refresh():
+    """Force refresh all data on server start."""
+    print("[startup] Refreshing match data...")
     refresh_cache()
+
+    print("[startup] Pre-loading transfer news...")
+    try:
+        articles = transfer_news.fetch_transfer_news()
+        if articles:
+            db.upsert_transfer_articles(articles)
+            print(f"[startup] Transfer news: {len(articles)} articles loaded")
+    except Exception as e:
+        print(f"[startup] Transfer news skipped: {e}")
+
+    print("[startup] Pre-loading stadium images for known venues...")
+    try:
+        with _cache_lock:
+            matches = _cache.get("matches", [])
+        venues = set()
+        for m in matches:
+            v = get_venue(m.get("home_team", ""))
+            if v:
+                venues.add(v)
+        for venue in venues:
+            if not db.load_stadium(venue):
+                try:
+                    result = stadium_module.get_stadium_image(venue)
+                    if result:
+                        db.save_stadium(venue, result["image_path"], result.get("attribution", ""))
+                        print(f"[startup] Stadium: {venue} -> {result['image_path']}")
+                except Exception:
+                    pass
+    except Exception as e:
+        print(f"[startup] Stadium pre-load skipped: {e}")
+
+    print("[startup] Ready.")
+
+
+if __name__ == "__main__":
+    startup_refresh()
     app.run(host="0.0.0.0", port=5000, debug=True)

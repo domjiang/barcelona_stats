@@ -214,7 +214,15 @@ header h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: 0.5px; }
 }
 .stadium-name { font-style: italic; }
 
-/* ===== Timeline ===== */
+/* ===== Competition emblem ===== */
+.comp-emblem {
+    width: 18px; height: 18px;
+    vertical-align: middle;
+    margin-right: 2px;
+    border-radius: 2px;
+}
+
+/* ===== Timeline (left/right layout) ===== */
 .timeline {
     margin-top: 14px;
     padding-top: 12px;
@@ -223,62 +231,106 @@ header h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: 0.5px; }
 }
 .match-card.expanded .timeline { display: block; }
 
-.timeline-section { margin-bottom: 10px; }
 .timeline-section-title {
     font-size: 0.7rem;
     text-transform: uppercase;
     letter-spacing: 0.5px;
     color: var(--text-muted);
-    margin-bottom: 6px;
+    margin-bottom: 10px;
+    text-align: center;
 }
 
-.timeline-events { position: relative; padding-left: 60px; }
+.timeline-events {
+    display: grid;
+    grid-template-columns: 1fr 2px 1fr;
+    gap: 0;
+    align-items: start;
+}
 .timeline-events::before {
-    content: "";
-    position: absolute;
-    left: 28px;
-    top: 4px;
-    bottom: 4px;
-    width: 2px;
+    display: none; /* we use the middle column as line */
+}
+
+.timeline-line {
+    grid-column: 2;
+    grid-row: 1 / -1;
     background: var(--surface2);
+    width: 2px;
+    margin: 0 auto;
+    position: relative;
 }
 
 .timeline-event {
     display: flex;
-    align-items: flex-start;
-    gap: 12px;
-    margin-bottom: 8px;
-    position: relative;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 6px;
     font-size: 0.82rem;
+    position: relative;
 }
-.timeline-minute {
-    position: absolute;
-    left: -58px;
-    top: 2px;
-    width: 54px;
+
+/* Barcelona events — left column */
+.timeline-event.barca {
+    grid-column: 1;
+    justify-content: flex-end;
     text-align: right;
-    font-size: 0.7rem;
+    padding-right: 12px;
+}
+.timeline-event.barca .timeline-text { text-align: right; }
+
+/* Opponent events — right column */
+.timeline-event.opp {
+    grid-column: 3;
+    justify-content: flex-start;
+    text-align: left;
+    padding-left: 12px;
+}
+
+.timeline-icon {
+    font-size: 1.1rem;
+    width: 22px;
+    text-align: center;
+    flex-shrink: 0;
+    order: 1;
+}
+.timeline-event.barca .timeline-icon { order: 2; }
+.timeline-event.opp .timeline-icon { order: 0; }
+
+.timeline-text { flex: 0 1 auto; }
+.timeline-event.barca .timeline-text { order: 1; }
+.timeline-event.opp .timeline-text { order: 1; }
+
+.timeline-player { font-weight: 500; }
+.timeline-minute {
+    font-size: 0.68rem;
     font-weight: 600;
     color: var(--text-muted);
     font-variant-numeric: tabular-nums;
 }
-.timeline-icon { font-size: 0.9rem; width: 22px; text-align: center; flex-shrink: 0; }
-.timeline-text { flex: 1; }
-.timeline-player { font-weight: 500; }
-.timeline-team { font-size: 0.7rem; color: var(--text-muted); margin-left: 6px; }
 
+/* Goal styles */
 .event-goal .timeline-player { color: var(--win); }
 .event-goal.opp-goal .timeline-player { color: var(--loss); }
+.event-goal .timeline-icon { color: var(--win); filter: none; }
+.event-goal.opp-goal .timeline-icon { color: var(--loss); }
+
+/* Card styles */
 .event-card .timeline-player { color: var(--draw); }
 .event-card.card-red .timeline-player { color: var(--loss); font-weight: 700; }
 
-.timeline-penalty { font-size: 0.65rem; color: var(--barca-gold); margin-left: 4px; }
+.timeline-penalty {
+    font-size: 0.6rem;
+    color: var(--barca-gold);
+    font-weight: 600;
+    margin: 0 2px;
+}
 
 .loading-events {
     color: var(--text-muted);
     font-size: 0.75rem;
     font-style: italic;
     padding: 8px 0;
+    grid-column: 1 / -1;
+    text-align: center;
 }
 
 /* ===== Transfer Board ===== */

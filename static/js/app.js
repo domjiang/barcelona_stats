@@ -3,6 +3,7 @@
 const REFRESH_MS = 5 * 60 * 1000;
 let charts = {};
 let currentData = null;
+let stadiumCache = {};
 
 // ===== Init =====
 document.addEventListener("DOMContentLoaded", () => {
@@ -40,8 +41,6 @@ function setupTabs() {
             const target = "tab-" + tab.dataset.tab;
             const el = document.getElementById(target);
             if (el) el.classList.remove("hidden");
-
-            // Load transfers when that tab is clicked
             if (tab.dataset.tab === "transfers") loadTransfers();
         });
     });
@@ -49,7 +48,6 @@ function setupTabs() {
 
 // ===== Main render =====
 function render(data) {
-    // All matches: reverse chronological (newest first)
     const all = [...(data.finished || []), ...(data.live || []), ...(data.upcoming || [])]
         .sort((a, b) => new Date(b.date) - new Date(a.date));
 
@@ -85,20 +83,12 @@ function render(data) {
     document.getElementById("tab-upcoming").innerHTML = renderMatchList(data.upcoming || []);
     document.getElementById("tab-live").innerHTML = renderMatchList(data.live || []);
 
-    // Charts (lazy — only when tab is visible)
-    const chartsTab = document.getElementById("tab-charts");
-    if (chartsTab && !chartsTab.classList.contains("hidden")) {
-        renderCharts(data);
-    }
+    // Lazy tabs
+    if (!document.getElementById("tab-charts").classList.contains("hidden")) renderCharts(data);
+    if (!document.getElementById("tab-transfers").classList.contains("hidden")) loadTransfers();
 
-    // Transfers (lazy)
-    const transfersTab = document.getElementById("tab-transfers");
-    if (transfersTab && !transfersTab.classList.contains("hidden")) {
-        loadTransfers();
-    }
-
-    // Stadium images: load lazily
-    loadStadiumImages(data);
+    // Load stadium images after DOM update
+    setTimeout(loadStadiumImages, 200);
 }
 
 // ===== Match list HTML =====
@@ -115,6 +105,11 @@ function renderMatchCard(m) {
     const isLive = status === "IN_PLAY" || status === "PAUSED";
     const isBarcaHome = m.is_home;
     const isUpcoming = !isFinished && !isLive;
+
+    // Competition emblem
+    const compEmblem = m.competition_emblem
+        ? `<img class="comp-emblem" src="${escAttr(m.competition_emblem)}" alt="" onerror="this.remove()">`
+        : "";
 
     // Result badge
     let badge = "";
@@ -145,27 +140,30 @@ function renderMatchCard(m) {
         ? '<span class="venue-badge home">HOME</span>'
         : '<span class="venue-badge away">AWAY</span>';
 
-    const venue = m.venue ? ` — ${m.venue}` : "";
+    const venueName = m.venue || "";
+    const venueText = venueName ? ` — ${venueName}` : "";
 
-    // Stadium row (for home matches)
+    // Stadium image row (home OR away — show opponent stadium too)
     let stadiumRow = "";
-    if (isBarcaHome && m.venue) {
+    if (venueName) {
+        const safeName = venueName.replace(/[^a-zA-Z0-9]/g, "_").toLowerCase();
         stadiumRow = `
             <div class="stadium-row">
-                <img class="stadium-thumb" data-stadium="${escAttr(m.venue)}" src="" alt="" onerror="this.style.display='none'" style="display:none">
-                <span class="stadium-name">${escHtml(m.venue)}</span>
+                <img class="stadium-thumb" data-stadium="${escAttr(venueName)}" data-stadium-id="${safeName}"
+                     src="" alt="" onerror="this.style.display='none'" style="display:none">
+                <span class="stadium-name">${escHtml(venueName)} ${venueBadge}</span>
             </div>`;
     }
 
     // Timeline content
-    const timelineHtml = renderTimeline(m);
+    const timelineHtml = renderTimeline(m, isBarcaHome);
 
     return `
         <div class="match-card status-${status}" data-match-id="${m.id}" onclick="toggleMatch(this, ${m.id})">
             <div class="match-card-header">
                 <div class="match-meta">
-                    <span class="competition">${m.competition} ${venueBadge}</span>
-                    <span class="date">${isLive ? "NOW" : m.date_display}${venue}</span>
+                    <span class="competition">${compEmblem}${m.competition}</span>
+                    <span class="date">${isLive ? "NOW" : m.date_display}${venueText}</span>
                     ${m.matchday ? '<span class="date">Matchday ' + m.matchday + "</span>" : ""}
                 </div>
                 <div class="match-teams">
@@ -187,7 +185,7 @@ function renderMatchCard(m) {
         </div>`;
 }
 
-function renderTimeline(m) {
+function renderTimeline(m, isBarcaHome) {
     const events = m.events || {};
     const goals = events.goals || [];
     const cards = events.cards || [];
@@ -197,69 +195,65 @@ function renderTimeline(m) {
     const isLive = m.status === "IN_PLAY" || m.status === "PAUSED";
 
     if (!isFinished && !isLive) return "";
+    if (!hasEvents && !hasFetched) return '<div class="loading-events">Click to load events…</div>';
+    if (!hasEvents && hasFetched && !events.found) return '<div class="loading-events">No detailed events available.</div>';
+    if (!hasEvents) return '<div class="loading-events">Loading…</div>';
 
-    if (!hasEvents && !hasFetched) {
-        return '<div class="loading-events">Click to load match events…</div>';
-    }
-    if (!hasEvents && hasFetched && !events.found) {
-        return '<div class="loading-events">No detailed events available for this match.</div>';
-    }
-    if (!hasEvents) {
-        return '<div class="loading-events">Loading…</div>';
-    }
+    const barcaTeamName = isBarcaHome ? m.home_team : m.away_team;
+    const oppTeamName = isBarcaHome ? m.away_team : m.home_team;
 
-    // Merge and sort events by minute
+    // Merge and sort events
     const allEvents = [
         ...goals.map(g => ({ ...g, etype: "goal" })),
         ...cards.map(c => ({ ...c, etype: "card" })),
     ];
-    // Sort by minute (rough string sort works for "7'", "23'", "90'+4'", etc.)
-    allEvents.sort((a, b) => {
-        const ma = parseMinute(a.minute);
-        const mb = parseMinute(b.minute);
-        return ma - mb;
+    allEvents.sort((a, b) => parseMinute(a.minute) - parseMinute(b.minute));
+
+    // Build left/right timeline rows
+    let rows = "";
+    allEvents.forEach(ev => {
+        const isBarca = ev.is_barca;
+        const side = isBarca ? "barca" : "opp";
+
+        if (ev.etype === "goal") {
+            const isPen = ev.type === "PENALTY";
+            const penaltyTag = isPen ? '<span class="timeline-penalty">(P)</span>' : "";
+            rows += `
+                <div class="timeline-event ${side} event-goal${isBarca ? "" : " opp-goal"}">
+                    <span class="timeline-icon"></span>
+                    <span class="timeline-text">
+                        <span class="timeline-minute">${ev.minute}</span>
+                        <span class="timeline-player">${escHtml(ev.scorer)}</span>${penaltyTag}
+                    </span>
+                </div>`;
+        } else {
+            const isRed = ev.card === "RED";
+            const cardIcon = isRed ? "" : "";
+            const cardCls = isRed ? "event-card card-red" : "event-card";
+            rows += `
+                <div class="timeline-event ${side} ${cardCls}">
+                    <span class="timeline-icon">${cardIcon}</span>
+                    <span class="timeline-text">
+                        <span class="timeline-minute">${ev.minute}</span>
+                        <span class="timeline-player">${escHtml(ev.player)}</span>
+                    </span>
+                </div>`;
+        }
     });
 
-    let html = "";
-    if (allEvents.length > 0) {
-        html += '<div class="timeline-section"><div class="timeline-section-title">Match Events</div>';
-        html += '<div class="timeline-events">';
-        allEvents.forEach(ev => {
-            if (ev.etype === "goal") {
-                const isPen = ev.type === "PENALTY";
-                const cls = ev.is_barca ? "event-goal" : "event-goal opp-goal";
-                html += `
-                    <div class="timeline-event ${cls}">
-                        <span class="timeline-minute">${ev.minute}</span>
-                        <span class="timeline-icon">${isPen ? "" : ""}</span>
-                        <span class="timeline-text">
-                            <span class="timeline-player">${escHtml(ev.scorer)}</span>
-                            ${isPen ? '<span class="timeline-penalty">(P)</span>' : ""}
-                            <span class="timeline-team">${escHtml(ev.team)}</span>
-                        </span>
-                    </div>`;
-            } else {
-                const cls = ev.card === "RED" ? "event-card card-red" : "event-card";
-                const icon = ev.card === "RED" ? "" : "";
-                html += `
-                    <div class="timeline-event ${cls}">
-                        <span class="timeline-minute">${ev.minute}</span>
-                        <span class="timeline-icon">${icon}</span>
-                        <span class="timeline-text">
-                            <span class="timeline-player">${escHtml(ev.player)}</span>
-                            <span class="timeline-team">${escHtml(ev.team)}</span>
-                        </span>
-                    </div>`;
-            }
-        });
-        html += '</div></div>';
-    }
-
-    return html;
+    return `
+        <div class="timeline-section">
+            <div class="timeline-section-title">
+                <span style="color:var(--barca-blue)">${escHtml(barcaTeamName)}</span>
+                &nbsp;— Match Events —&nbsp;
+                <span style="color:var(--text-muted)">${escHtml(oppTeamName)}</span>
+            </div>
+            <div class="timeline-events">${rows}</div>
+        </div>`;
 }
 
 function parseMinute(minStr) {
-    const m = minStr.match(/(\d+)'?(\+(\d+))?/);
+    const m = String(minStr).match(/(\d+)'?(\+(\d+))?/);
     if (!m) return 999;
     return parseInt(m[1]) + (parseInt(m[3]) || 0) * 0.01;
 }
@@ -267,14 +261,10 @@ function parseMinute(minStr) {
 // ===== Accordion =====
 function toggleMatch(card, matchId) {
     const wasExpanded = card.classList.contains("expanded");
-
-    // Close all others
     document.querySelectorAll(".match-card.expanded").forEach(c => c.classList.remove("expanded"));
 
     if (!wasExpanded) {
         card.classList.add("expanded");
-
-        // Fetch events if not already loaded
         const events = getMatchEventsFromCache(matchId);
         if (!events || (!events.found && events.found !== false)) {
             fetchMatchEvents(card, matchId);
@@ -292,43 +282,56 @@ function getMatchEventsFromCache(matchId) {
 async function fetchMatchEvents(card, matchId) {
     const timeline = card.querySelector(".timeline");
     if (!timeline) return;
-    timeline.innerHTML = '<div class="loading-events">Loading events…</div>';
+    timeline.innerHTML = '<div class="loading-events">Loading…</div>';
 
     try {
         const resp = await fetch(`/api/match/${matchId}/events`);
         const data = await resp.json();
         if (data.events) {
-            // Update local cache
             const all = [...(currentData.finished || []), ...(currentData.live || []), ...(currentData.upcoming || [])];
             const m = all.find(x => x.id === matchId);
             if (m) m.events = data.events;
-            // Re-render timeline
-            if (m) timeline.innerHTML = renderTimeline(m).replace(/.*<div class="timeline-section">/s, '<div class="timeline-section">');
+            if (m) {
+                timeline.innerHTML = renderTimeline(m, m.is_home)
+                    .replace(/.*<div class="timeline-section">/s, '<div class="timeline-section">');
+            }
         } else {
             timeline.innerHTML = '<div class="loading-events">No events available.</div>';
         }
     } catch {
-        timeline.innerHTML = '<div class="loading-events">Failed to load events.</div>';
+        timeline.innerHTML = '<div class="loading-events">Failed to load.</div>';
     }
 }
 
 // ===== Stadium images =====
-async function loadStadiumImages(data) {
-    const all = [...(data.finished || []), ...(data.live || []), ...(data.upcoming || [])];
+function loadStadiumImages() {
     const imgs = document.querySelectorAll("img.stadium-thumb[data-stadium]");
-    imgs.forEach(async (img) => {
+    imgs.forEach(img => {
         const name = img.dataset.stadium;
         if (!name || img.src) return;
-        try {
-            const resp = await fetch(`/api/stadium-image?name=${encodeURIComponent(name)}`);
-            const sd = await resp.json();
-            if (sd.image_path) {
-                img.src = sd.image_path;
-                img.style.display = "";
-                img.title = sd.attribution || "";
-            }
-        } catch { /* ignore */ }
+
+        if (stadiumCache[name]) {
+            img.src = stadiumCache[name];
+            img.style.display = "";
+            return;
+        }
+
+        // Fetch from backend
+        fetchStadiumImage(img, name);
     });
+}
+
+async function fetchStadiumImage(img, name) {
+    try {
+        const resp = await fetch(`/api/stadium-image?name=${encodeURIComponent(name)}`);
+        const sd = await resp.json();
+        if (sd.image_path) {
+            stadiumCache[name] = sd.image_path;
+            img.src = sd.image_path;
+            img.style.display = "";
+            img.title = sd.attribution || "";
+        }
+    } catch { /* ignore */ }
 }
 
 // ===== Transfer News =====
@@ -345,7 +348,6 @@ async function loadTransfers() {
 
 function renderTransferBoard(data) {
     const cats = data.categories || {};
-    const labels = { in: "Rumored In", rumor: "Rumors", out: "Rumored Out" };
 
     Object.entries(cats).forEach(([cat, articles]) => {
         const listEl = document.getElementById(`list-${cat}`);
@@ -362,9 +364,13 @@ function renderTransferBoard(data) {
             const playersHtml = (a.players || []).length > 0
                 ? `<div class="transfer-players">${a.players.map(p => `<span class="transfer-player-tag">${escHtml(p)}</span>`).join("")}</div>`
                 : "";
+            const origTitle = a.original_title
+                ? `<div style="font-size:0.7rem;color:var(--text-muted);margin-top:2px;">Original: ${escHtml(a.original_title)}</div>`
+                : "";
             return `
                 <div class="transfer-item">
                     <a href="${escAttr(a.link)}" target="_blank" rel="noopener">${escHtml(a.title)}</a>
+                    ${origTitle}
                     <div class="transfer-source">${escHtml(a.source)}</div>
                     ${playersHtml}
                 </div>`;
@@ -372,7 +378,7 @@ function renderTransferBoard(data) {
     });
 
     document.getElementById("transfer-updated").textContent =
-        data.stale ? "Updating…" : "Last updated: " + formatTime(new Date().toISOString());
+        data.stale ? "Updating…" : "Last fetched: " + formatTime(new Date().toISOString());
 }
 
 async function refreshTransfers() {
@@ -389,7 +395,6 @@ async function refreshTransfers() {
 function renderCharts(data) {
     const st = data.stats || {};
     if (st.played === 0) return;
-
     destroyCharts();
 
     const wdlCtx = document.getElementById("chart-wdl");
@@ -406,8 +411,7 @@ function renderCharts(data) {
                 }]
             },
             options: {
-                responsive: true,
-                maintainAspectRatio: true,
+                responsive: true, maintainAspectRatio: true,
                 plugins: { legend: { position: "bottom", labels: { color: "#e0e0e0" } } }
             }
         });
@@ -420,18 +424,13 @@ function renderCharts(data) {
             data: {
                 labels: st.timeline.map(t => t.label),
                 datasets: [{
-                    label: "Points",
-                    data: st.timeline.map(t => t.points),
-                    borderColor: "#A50044",
-                    backgroundColor: "rgba(165,0,68,0.1)",
-                    fill: true,
-                    tension: 0.3,
-                    pointBackgroundColor: "#A50044",
+                    label: "Points", data: st.timeline.map(t => t.points),
+                    borderColor: "#A50044", backgroundColor: "rgba(165,0,68,0.1)",
+                    fill: true, tension: 0.3, pointBackgroundColor: "#A50044",
                 }]
             },
             options: {
-                responsive: true,
-                maintainAspectRatio: true,
+                responsive: true, maintainAspectRatio: true,
                 scales: {
                     y: { beginAtZero: true, ticks: { color: "#999" }, grid: { color: "rgba(255,255,255,0.05)" } },
                     x: { ticks: { color: "#999" }, grid: { display: false } }
@@ -448,15 +447,13 @@ function renderCharts(data) {
             data: {
                 labels: st.timeline.map(t => t.label),
                 datasets: [{
-                    label: "Goals",
-                    data: st.timeline.map(t => t.goals),
+                    label: "Goals", data: st.timeline.map(t => t.goals),
                     backgroundColor: st.timeline.map(t => t.goals > 1 ? "#2ecc71" : t.goals === 1 ? "#f39c12" : "#e74c3c"),
                     borderRadius: 4,
                 }]
             },
             options: {
-                responsive: true,
-                maintainAspectRatio: true,
+                responsive: true, maintainAspectRatio: true,
                 scales: {
                     y: { beginAtZero: true, ticks: { stepSize: 1, color: "#999" }, grid: { color: "rgba(255,255,255,0.05)" } },
                     x: { ticks: { color: "#999" }, grid: { display: false } }
@@ -481,8 +478,7 @@ function renderCharts(data) {
                 ]
             },
             options: {
-                responsive: true,
-                maintainAspectRatio: true,
+                responsive: true, maintainAspectRatio: true,
                 scales: {
                     x: { stacked: true, ticks: { color: "#999" }, grid: { display: false } },
                     y: { stacked: true, ticks: { color: "#999" }, grid: { color: "rgba(255,255,255,0.05)" } }
