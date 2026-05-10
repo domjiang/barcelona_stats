@@ -66,9 +66,10 @@
             <button class="tab" data-tab="finished">Past</button>
             <button class="tab" data-tab="upcoming">Upcoming</button>
             <button class="tab" data-tab="charts">Charts</button>
+            <button class="tab" data-tab="transfers">Transfers</button>
         </nav>
 
-        <!-- Tab content: All / Live / Finished / Upcoming -->
+        <!-- Match tabs -->
         <section class="tab-content" id="tab-all"></section>
         <section class="tab-content hidden" id="tab-live"></section>
         <section class="tab-content hidden" id="tab-finished"></section>
@@ -95,11 +96,36 @@
                 </div>
             </div>
         </section>
+
+        <!-- Transfers tab -->
+        <section class="tab-content hidden" id="tab-transfers">
+            <div class="transfer-board" id="transfer-board">
+                <div class="transfer-col" id="transfer-in">
+                    <h3 class="transfer-col-h3">Rumored In <span class="badge-count" id="count-in">0</span></h3>
+                    <div class="transfer-list" id="list-in"></div>
+                </div>
+                <div class="transfer-col" id="transfer-rumor">
+                    <h3 class="transfer-col-h3">Rumors <span class="badge-count" id="count-rumor">0</span></h3>
+                    <div class="transfer-list" id="list-rumor"></div>
+                </div>
+                <div class="transfer-col" id="transfer-out">
+                    <h3 class="transfer-col-h3">Rumored Out <span class="badge-count" id="count-out">0</span></h3>
+                    <div class="transfer-list" id="list-out"></div>
+                </div>
+            </div>
+            <div class="transfer-footer">
+                <span id="transfer-updated"></span>
+                <button id="btn-transfer-refresh" class="btn-link">↻ Refresh transfers</button>
+            </div>
+        </section>
     </main>
 
     <footer>
         <p>Matches via <a href="https://www.football-data.org/" target="_blank" rel="noopener">football-data.org</a>
         &nbsp;|&nbsp; Events via <a href="https://www.espn.com/" target="_blank" rel="noopener">ESPN</a>
+        &nbsp;|&nbsp; News via <a href="https://www.marca.com/" target="_blank" rel="noopener">Marca</a>,
+        <a href="https://www.mundodeportivo.com/" target="_blank" rel="noopener">MD</a>,
+        <a href="https://www.sport.es/" target="_blank" rel="noopener">Sport</a>
         &nbsp;|&nbsp; Auto-refreshes every 5 minutes &nbsp;|&nbsp;
         <button id="btn-refresh" class="btn-link">↻ Refresh now</button></p>
     </footer>

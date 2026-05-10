@@ -2,11 +2,13 @@
 
 const REFRESH_MS = 5 * 60 * 1000;
 let charts = {};
+let currentData = null;
 
 // ===== Init =====
 document.addEventListener("DOMContentLoaded", () => {
     setupTabs();
     document.getElementById("btn-refresh").addEventListener("click", fetchAndRender);
+    document.getElementById("btn-transfer-refresh").addEventListener("click", refreshTransfers);
     fetchAndRender();
     setInterval(fetchAndRender, REFRESH_MS);
 });
@@ -21,6 +23,7 @@ async function fetchAndRender() {
         } else {
             hideError();
         }
+        currentData = data;
         render(data);
     } catch (err) {
         showError(`Failed to connect to server: ${err.message}`);
@@ -37,14 +40,18 @@ function setupTabs() {
             const target = "tab-" + tab.dataset.tab;
             const el = document.getElementById(target);
             if (el) el.classList.remove("hidden");
+
+            // Load transfers when that tab is clicked
+            if (tab.dataset.tab === "transfers") loadTransfers();
         });
     });
 }
 
 // ===== Main render =====
 function render(data) {
+    // All matches: reverse chronological (newest first)
     const all = [...(data.finished || []), ...(data.live || []), ...(data.upcoming || [])]
-        .sort((a, b) => new Date(a.date) - new Date(b.date));
+        .sort((a, b) => new Date(b.date) - new Date(a.date));
 
     document.getElementById("update-time").textContent =
         "Updated: " + (data.last_updated ? formatTime(data.last_updated) : "never");
@@ -72,14 +79,26 @@ function render(data) {
     document.getElementById("stat-ga").textContent = st.goals_against ?? "-";
     document.getElementById("stat-points").textContent = st.points ?? "-";
 
-    // Render tab contents
+    // Render match tabs
     document.getElementById("tab-all").innerHTML = renderMatchList(all);
     document.getElementById("tab-finished").innerHTML = renderMatchList(data.finished || []);
     document.getElementById("tab-upcoming").innerHTML = renderMatchList(data.upcoming || []);
     document.getElementById("tab-live").innerHTML = renderMatchList(data.live || []);
 
-    // Charts
-    renderCharts(data);
+    // Charts (lazy — only when tab is visible)
+    const chartsTab = document.getElementById("tab-charts");
+    if (chartsTab && !chartsTab.classList.contains("hidden")) {
+        renderCharts(data);
+    }
+
+    // Transfers (lazy)
+    const transfersTab = document.getElementById("tab-transfers");
+    if (transfersTab && !transfersTab.classList.contains("hidden")) {
+        loadTransfers();
+    }
+
+    // Stadium images: load lazily
+    loadStadiumImages(data);
 }
 
 // ===== Match list HTML =====
@@ -94,8 +113,10 @@ function renderMatchCard(m) {
     const status = m.status;
     const isFinished = status === "FINISHED";
     const isLive = status === "IN_PLAY" || status === "PAUSED";
-    const isBarcaHome = m.home_team === "Barça" || m.home_team === "Barcelona";
+    const isBarcaHome = m.is_home;
+    const isUpcoming = !isFinished && !isLive;
 
+    // Result badge
     let badge = "";
     if (isLive) {
         badge = '<span class="match-badge badge-live">LIVE ' + (status === "PAUSED" ? "(Paused)" : "") + "</span>";
@@ -109,147 +130,258 @@ function renderMatchCard(m) {
         badge = '<span class="match-badge badge-upcoming">' + formatDateShort(m.date) + "</span>";
     }
 
+    // Score
     let scoreHtml = "";
     if (isFinished && m.home_score !== null && m.away_score !== null) {
-        scoreHtml = `
-            <div class="match-score">
-                <span class="score-num">${m.home_score} - ${m.away_score}</span>
-                <span class="score-label">FT</span>
-            </div>`;
+        scoreHtml = `<div class="match-score"><span class="score-num">${m.home_score} - ${m.away_score}</span><span class="score-label">FT</span></div>`;
     } else if (isLive && m.home_score !== null && m.away_score !== null) {
-        scoreHtml = `
-            <div class="match-score">
-                <span class="score-num" style="color:var(--live)">${m.home_score} - ${m.away_score}</span>
-                <span class="score-label">LIVE</span>
-            </div>`;
+        scoreHtml = `<div class="match-score"><span class="score-num" style="color:var(--live)">${m.home_score} - ${m.away_score}</span><span class="score-label">LIVE</span></div>`;
     } else {
-        scoreHtml = `
-            <div class="match-score">
-                <span class="score-num" style="color:var(--text-muted)">vs</span>
+        scoreHtml = `<div class="match-score"><span class="score-num" style="color:var(--text-muted)">vs</span></div>`;
+    }
+
+    // HOME/AWAY badge
+    const venueBadge = isBarcaHome
+        ? '<span class="venue-badge home">HOME</span>'
+        : '<span class="venue-badge away">AWAY</span>';
+
+    const venue = m.venue ? ` — ${m.venue}` : "";
+
+    // Stadium row (for home matches)
+    let stadiumRow = "";
+    if (isBarcaHome && m.venue) {
+        stadiumRow = `
+            <div class="stadium-row">
+                <img class="stadium-thumb" data-stadium="${escAttr(m.venue)}" src="" alt="" onerror="this.style.display='none'" style="display:none">
+                <span class="stadium-name">${escHtml(m.venue)}</span>
             </div>`;
     }
 
-    const venue = m.venue ? `<br> ${m.venue}` : "";
-
-    // Events: goals + cards
-    const eventsHtml = renderEvents(m);
+    // Timeline content
+    const timelineHtml = renderTimeline(m);
 
     return `
-        <div class="match-card status-${status}">
-            <div class="match-meta">
-                <span class="competition">${m.competition}</span>
-                <span class="date">${isLive ? "NOW" : m.date_display}${venue}</span>
-                ${m.matchday ? '<span class="date">Matchday ' + m.matchday + "</span>" : ""}
-            </div>
-            <div class="match-teams">
-                <div class="team home">
-                    <span>${m.home_team}</span>
-                    ${m.home_crest ? `<img src="${m.home_crest}" alt="" onerror="this.remove()">` : ""}
+        <div class="match-card status-${status}" data-match-id="${m.id}" onclick="toggleMatch(this, ${m.id})">
+            <div class="match-card-header">
+                <div class="match-meta">
+                    <span class="competition">${m.competition} ${venueBadge}</span>
+                    <span class="date">${isLive ? "NOW" : m.date_display}${venue}</span>
+                    ${m.matchday ? '<span class="date">Matchday ' + m.matchday + "</span>" : ""}
                 </div>
-                ${scoreHtml}
-                <div class="team away">
-                    ${m.away_crest ? `<img src="${m.away_crest}" alt="" onerror="this.remove()">` : ""}
-                    <span>${m.away_team}</span>
+                <div class="match-teams">
+                    <div class="team home">
+                        <span>${m.home_team}</span>
+                        ${m.home_crest ? `<img src="${m.home_crest}" alt="" onerror="this.remove()">` : ""}
+                    </div>
+                    ${scoreHtml}
+                    <div class="team away">
+                        ${m.away_crest ? `<img src="${m.away_crest}" alt="" onerror="this.remove()">` : ""}
+                        <span>${m.away_team}</span>
+                    </div>
                 </div>
+                ${badge}
             </div>
-            ${badge}
-            ${eventsHtml}
+            ${stadiumRow}
+            <div class="timeline">${timelineHtml}</div>
+            <div class="expand-arrow">▼</div>
         </div>`;
 }
 
-function renderEvents(m) {
-    const ev = m.events || {};
-    const goals = ev.goals || [];
-    const cards = ev.cards || [];
+function renderTimeline(m) {
+    const events = m.events || {};
+    const goals = events.goals || [];
+    const cards = events.cards || [];
+    const hasEvents = goals.length > 0 || cards.length > 0;
+    const hasFetched = events.found !== undefined;
+    const isFinished = m.status === "FINISHED";
+    const isLive = m.status === "IN_PLAY" || m.status === "PAUSED";
 
-    if (goals.length === 0 && cards.length === 0) {
-        // Show load button for finished/live matches without events
-        if (m.status === "FINISHED" || m.status === "IN_PLAY" || m.status === "PAUSED") {
-            return `
-                <div class="match-events">
-                    <button class="btn-load-events" data-match-id="${m.id}" onclick="loadMatchEvents(this, ${m.id})">
-                        Load details
-                    </button>
-                </div>`;
-        }
-        return "";
+    if (!isFinished && !isLive) return "";
+
+    if (!hasEvents && !hasFetched) {
+        return '<div class="loading-events">Click to load match events…</div>';
+    }
+    if (!hasEvents && hasFetched && !events.found) {
+        return '<div class="loading-events">No detailed events available for this match.</div>';
+    }
+    if (!hasEvents) {
+        return '<div class="loading-events">Loading…</div>';
     }
 
-    // Separate goals for/against Barça
-    const barcaGoals = goals.filter(g => g.is_barca);
-    const oppGoals = goals.filter(g => !g.is_barca);
-    const barcaCards = cards.filter(c => c.is_barca);
-    const oppCards = cards.filter(c => !c.is_barca);
+    // Merge and sort events by minute
+    const allEvents = [
+        ...goals.map(g => ({ ...g, etype: "goal" })),
+        ...cards.map(c => ({ ...c, etype: "card" })),
+    ];
+    // Sort by minute (rough string sort works for "7'", "23'", "90'+4'", etc.)
+    allEvents.sort((a, b) => {
+        const ma = parseMinute(a.minute);
+        const mb = parseMinute(b.minute);
+        return ma - mb;
+    });
 
-    let html = '<div class="match-events">';
-
-    // Goals section
-    if (goals.length > 0) {
-        html += '<div class="events-row">';
-        // Our goals
-        if (barcaGoals.length > 0) {
-            html += '<div class="event-list goals">';
-            barcaGoals.forEach(g => {
-                const icon = g.type === "PENALTY" ? "" : "";
-                html += `<span class="event-item goal-barca" title="${g.scorer}">${g.minute}' ${g.scorer}${icon}</span>`;
-            });
-            html += '</div>';
-        }
-        // Their goals
-        if (oppGoals.length > 0) {
-            html += '<div class="event-list goals opp">';
-            oppGoals.forEach(g => {
-                html += `<span class="event-item goal-opp" title="${g.scorer}">${g.minute}' ${g.scorer}</span>`;
-            });
-            html += '</div>';
-        }
-        html += '</div>';
+    let html = "";
+    if (allEvents.length > 0) {
+        html += '<div class="timeline-section"><div class="timeline-section-title">Match Events</div>';
+        html += '<div class="timeline-events">';
+        allEvents.forEach(ev => {
+            if (ev.etype === "goal") {
+                const isPen = ev.type === "PENALTY";
+                const cls = ev.is_barca ? "event-goal" : "event-goal opp-goal";
+                html += `
+                    <div class="timeline-event ${cls}">
+                        <span class="timeline-minute">${ev.minute}</span>
+                        <span class="timeline-icon">${isPen ? "" : ""}</span>
+                        <span class="timeline-text">
+                            <span class="timeline-player">${escHtml(ev.scorer)}</span>
+                            ${isPen ? '<span class="timeline-penalty">(P)</span>' : ""}
+                            <span class="timeline-team">${escHtml(ev.team)}</span>
+                        </span>
+                    </div>`;
+            } else {
+                const cls = ev.card === "RED" ? "event-card card-red" : "event-card";
+                const icon = ev.card === "RED" ? "" : "";
+                html += `
+                    <div class="timeline-event ${cls}">
+                        <span class="timeline-minute">${ev.minute}</span>
+                        <span class="timeline-icon">${icon}</span>
+                        <span class="timeline-text">
+                            <span class="timeline-player">${escHtml(ev.player)}</span>
+                            <span class="timeline-team">${escHtml(ev.team)}</span>
+                        </span>
+                    </div>`;
+            }
+        });
+        html += '</div></div>';
     }
 
-    // Cards section
-    if (cards.length > 0) {
-        html += '<div class="events-row cards-row">';
-        if (barcaCards.length > 0) {
-            html += '<div class="event-list">';
-            barcaCards.forEach(c => {
-                const cls = c.card === "RED" ? "card-red" : "card-yellow";
-                const icon = c.card === "RED" ? "" : "";
-                html += `<span class="event-item ${cls}">${c.minute}' ${c.player}${icon}</span>`;
-            });
-            html += '</div>';
-        }
-        if (oppCards.length > 0) {
-            html += '<div class="event-list">';
-            oppCards.forEach(c => {
-                const cls = c.card === "RED" ? "card-red" : "card-yellow";
-                const icon = c.card === "RED" ? "" : "";
-                html += `<span class="event-item ${cls}">${c.minute}' ${c.player}${icon}</span>`;
-            });
-            html += '</div>';
-        }
-        html += '</div>';
-    }
-
-    html += '</div>';
     return html;
 }
 
-async function loadMatchEvents(btn, matchId) {
-    btn.textContent = "Loading...";
-    btn.disabled = true;
+function parseMinute(minStr) {
+    const m = minStr.match(/(\d+)'?(\+(\d+))?/);
+    if (!m) return 999;
+    return parseInt(m[1]) + (parseInt(m[3]) || 0) * 0.01;
+}
+
+// ===== Accordion =====
+function toggleMatch(card, matchId) {
+    const wasExpanded = card.classList.contains("expanded");
+
+    // Close all others
+    document.querySelectorAll(".match-card.expanded").forEach(c => c.classList.remove("expanded"));
+
+    if (!wasExpanded) {
+        card.classList.add("expanded");
+
+        // Fetch events if not already loaded
+        const events = getMatchEventsFromCache(matchId);
+        if (!events || (!events.found && events.found !== false)) {
+            fetchMatchEvents(card, matchId);
+        }
+    }
+}
+
+function getMatchEventsFromCache(matchId) {
+    if (!currentData) return null;
+    const all = [...(currentData.finished || []), ...(currentData.live || []), ...(currentData.upcoming || [])];
+    const m = all.find(x => x.id === matchId);
+    return m ? m.events : null;
+}
+
+async function fetchMatchEvents(card, matchId) {
+    const timeline = card.querySelector(".timeline");
+    if (!timeline) return;
+    timeline.innerHTML = '<div class="loading-events">Loading events…</div>';
+
     try {
         const resp = await fetch(`/api/match/${matchId}/events`);
         const data = await resp.json();
-        if (data.events && (data.events.goals.length > 0 || data.events.cards.length > 0)) {
-            // Refresh the whole view to show events
-            fetchAndRender();
+        if (data.events) {
+            // Update local cache
+            const all = [...(currentData.finished || []), ...(currentData.live || []), ...(currentData.upcoming || [])];
+            const m = all.find(x => x.id === matchId);
+            if (m) m.events = data.events;
+            // Re-render timeline
+            if (m) timeline.innerHTML = renderTimeline(m).replace(/.*<div class="timeline-section">/s, '<div class="timeline-section">');
         } else {
-            btn.textContent = "No details";
-            btn.classList.add("no-data");
+            timeline.innerHTML = '<div class="loading-events">No events available.</div>';
         }
     } catch {
-        btn.textContent = "Error - retry";
-        btn.disabled = false;
+        timeline.innerHTML = '<div class="loading-events">Failed to load events.</div>';
+    }
+}
+
+// ===== Stadium images =====
+async function loadStadiumImages(data) {
+    const all = [...(data.finished || []), ...(data.live || []), ...(data.upcoming || [])];
+    const imgs = document.querySelectorAll("img.stadium-thumb[data-stadium]");
+    imgs.forEach(async (img) => {
+        const name = img.dataset.stadium;
+        if (!name || img.src) return;
+        try {
+            const resp = await fetch(`/api/stadium-image?name=${encodeURIComponent(name)}`);
+            const sd = await resp.json();
+            if (sd.image_path) {
+                img.src = sd.image_path;
+                img.style.display = "";
+                img.title = sd.attribution || "";
+            }
+        } catch { /* ignore */ }
+    });
+}
+
+// ===== Transfer News =====
+async function loadTransfers() {
+    try {
+        const resp = await fetch("/api/transfers");
+        const data = await resp.json();
+        renderTransferBoard(data);
+    } catch {
+        document.getElementById("list-rumor").innerHTML =
+            '<p style="color:var(--text-muted);padding:20px;">Failed to load transfer news.</p>';
+    }
+}
+
+function renderTransferBoard(data) {
+    const cats = data.categories || {};
+    const labels = { in: "Rumored In", rumor: "Rumors", out: "Rumored Out" };
+
+    Object.entries(cats).forEach(([cat, articles]) => {
+        const listEl = document.getElementById(`list-${cat}`);
+        const countEl = document.getElementById(`count-${cat}`);
+        if (!listEl) return;
+        if (countEl) countEl.textContent = articles.length;
+
+        if (!articles.length) {
+            listEl.innerHTML = '<p style="color:var(--text-muted);padding:10px;">No articles yet</p>';
+            return;
+        }
+
+        listEl.innerHTML = articles.map(a => {
+            const playersHtml = (a.players || []).length > 0
+                ? `<div class="transfer-players">${a.players.map(p => `<span class="transfer-player-tag">${escHtml(p)}</span>`).join("")}</div>`
+                : "";
+            return `
+                <div class="transfer-item">
+                    <a href="${escAttr(a.link)}" target="_blank" rel="noopener">${escHtml(a.title)}</a>
+                    <div class="transfer-source">${escHtml(a.source)}</div>
+                    ${playersHtml}
+                </div>`;
+        }).join("");
+    });
+
+    document.getElementById("transfer-updated").textContent =
+        data.stale ? "Updating…" : "Last updated: " + formatTime(new Date().toISOString());
+}
+
+async function refreshTransfers() {
+    document.getElementById("transfer-updated").textContent = "Refreshing…";
+    try {
+        await fetch("/api/transfer-refresh", { method: "POST" });
+        await loadTransfers();
+    } catch {
+        document.getElementById("transfer-updated").textContent = "Refresh failed";
     }
 }
 
@@ -260,7 +392,6 @@ function renderCharts(data) {
 
     destroyCharts();
 
-    // WDL Doughnut
     const wdlCtx = document.getElementById("chart-wdl");
     if (wdlCtx) {
         charts.wdl = new Chart(wdlCtx, {
@@ -282,7 +413,6 @@ function renderCharts(data) {
         });
     }
 
-    // Points progression
     const ptsCtx = document.getElementById("chart-points");
     if (ptsCtx && st.timeline) {
         charts.points = new Chart(ptsCtx, {
@@ -311,7 +441,6 @@ function renderCharts(data) {
         });
     }
 
-    // Goals per match
     const goalsCtx = document.getElementById("chart-goals");
     if (goalsCtx && st.timeline) {
         charts.goals = new Chart(goalsCtx, {
@@ -337,7 +466,6 @@ function renderCharts(data) {
         });
     }
 
-    // Competitions breakdown
     const compCtx = document.getElementById("chart-competitions");
     if (compCtx && st.competitions) {
         const comps = st.competitions;
@@ -371,26 +499,25 @@ function destroyCharts() {
 }
 
 // ===== Helpers =====
+function escHtml(s) {
+    const d = document.createElement("div");
+    d.textContent = s;
+    return d.innerHTML;
+}
+function escAttr(s) {
+    return s.replace(/&/g, "&amp;").replace(/"/g, "&quot;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
 function formatTime(iso) {
-    try {
-        const d = new Date(iso);
-        return d.toLocaleString();
-    } catch { return iso; }
+    try { return new Date(iso).toLocaleString(); } catch { return iso; }
 }
-
 function formatDateShort(iso) {
-    try {
-        const d = new Date(iso);
-        return d.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
-    } catch { return "TBD"; }
+    try { return new Date(iso).toLocaleDateString("en-GB", { day: "numeric", month: "short" }); } catch { return "TBD"; }
 }
-
 function showError(msg) {
     const el = document.getElementById("error-banner");
     el.textContent = msg;
     el.classList.remove("hidden");
 }
-
 function hideError() {
     document.getElementById("error-banner").classList.add("hidden");
 }

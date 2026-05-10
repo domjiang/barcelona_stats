@@ -9,23 +9,27 @@ from dotenv import load_dotenv
 
 from api_client import FootballDataAPI
 from espn_client import get_match_events
+import db
+import stadiums as stadium_module
+import transfer_news
 
 load_dotenv()
 
 app = Flask(__name__)
 
-# In-memory cache
+# In-memory cache for fast API responses
 _cache: dict = {
-    "matches": [],
     "last_updated": None,
     "error": None,
+    "finished": [],
+    "upcoming": [],
+    "live": [],
+    "stats": {},
+    "all_events": {},
 }
-# { match_id: { "goals": [...], "cards": [...] } }
-_events_cache: dict = {}
-_events_last_fetched: dict[str, datetime] = {}
 _cache_lock = threading.Lock()
-CACHE_TTL_SECONDS = 5 * 60  # 5 minutes
-EVENTS_TTL_SECONDS = 60 * 60  # 1 hour for events
+CACHE_TTL = 5 * 60  # 5 min
+EVENTS_FETCH_DELAY = 3  # sec between ESPN calls
 
 
 def _compute_stats(matches: list[dict]) -> dict:
@@ -97,9 +101,7 @@ def _compute_stats(matches: list[dict]) -> dict:
 
 
 def categorize(matches: list[dict]) -> dict:
-    live = []
-    finished = []
-    upcoming = []
+    live = []; finished = []; upcoming = []
     for m in matches:
         s = m["status"]
         if s in ("IN_PLAY", "PAUSED"):
@@ -113,23 +115,15 @@ def categorize(matches: list[dict]) -> dict:
     return {"live": live, "finished": finished, "upcoming": upcoming}
 
 
-def _enrich_with_events(matches: list[dict]):
-    """Fetch ESPN events for recent/live matches in background."""
-    global _events_cache, _events_last_fetched
+def _enrich_events(matches: list[dict]):
+    """Background: fetch ESPN events for recent/live matches, save to DB."""
     thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
     now = datetime.now(timezone.utc)
 
     for m in matches:
-        mid = str(m["id"])
-
-        # Skip if recently fetched
-        with _cache_lock:
-            last = _events_last_fetched.get(mid)
-            if last and (now - last).total_seconds() < EVENTS_TTL_SECONDS:
-                continue
-
-        # Only fetch for: live matches, finished within 30 days, or upcoming within 3 days
+        mid = m["id"]
         status = m["status"]
+
         try:
             mdate = datetime.fromisoformat(m["date"].replace("Z", "+00:00"))
         except (ValueError, AttributeError):
@@ -138,11 +132,18 @@ def _enrich_with_events(matches: list[dict]):
         should_fetch = (
             status in ("IN_PLAY", "PAUSED")
             or (status == "FINISHED" and mdate and mdate > thirty_days_ago)
-            or (mdate and mdate > now and mdate - now < timedelta(days=3))
         )
 
         if not should_fetch:
             continue
+
+        # Check DB for existing events
+        existing = db.load_events(mid)
+        if existing and existing.get("found"):
+            if status == "FINISHED":
+                continue  # Finished + stored = done
+            if not db.is_events_stale(mid):
+                continue
 
         try:
             events = get_match_events(
@@ -152,22 +153,41 @@ def _enrich_with_events(matches: list[dict]):
                 match_date=m.get("date", ""),
             )
             if events.get("found"):
-                with _cache_lock:
-                    _events_cache[mid] = {"goals": events["goals"], "cards": events["cards"]}
-                    _events_last_fetched[mid] = now
+                db.save_events(mid, {"goals": events["goals"], "cards": events["cards"], "found": True})
         except Exception:
-            pass  # Silently skip ESPN failures
+            pass
 
-        time.sleep(3)  # Be gentle with ESPN's API
+        time.sleep(EVENTS_FETCH_DELAY)
+
+
+def _load_events_from_db(match_ids: list[int]) -> dict:
+    result = {}
+    for mid in match_ids:
+        ev = db.load_events(mid)
+        if ev:
+            result[mid] = ev
+    return result
 
 
 def refresh_cache():
     global _cache
     try:
         api = FootballDataAPI()
-        matches = api.get_all_matches_formatted()
+
+        # Try DB first
+        if not db.is_match_list_stale():
+            matches = db.load_matches()
+        else:
+            matches = api.get_all_matches_formatted()
+            db.save_matches(matches)
+
         categorized = categorize(matches)
         stats = _compute_stats(matches)
+
+        # Load events from DB
+        all_ids = [m["id"] for m in matches]
+        all_events = _load_events_from_db(all_ids)
+
         with _cache_lock:
             _cache = {
                 "matches": matches,
@@ -175,15 +195,42 @@ def refresh_cache():
                 "upcoming": categorized["upcoming"],
                 "live": categorized["live"],
                 "stats": stats,
+                "all_events": all_events,
                 "last_updated": datetime.now(timezone.utc).isoformat(),
                 "error": None,
             }
-        # Start background thread to fetch events
-        t = threading.Thread(target=_enrich_with_events, args=(matches,), daemon=True)
-        t.start()
+
+        # Background: fetch missing events from ESPN
+        needs_events = [
+            m for m in matches
+            if m["id"] not in all_events or not all_events[m["id"]].get("found")
+        ]
+        if needs_events:
+            t = threading.Thread(target=_enrich_events, args=(needs_events,), daemon=True)
+            t.start()
+
     except Exception as e:
-        with _cache_lock:
-            _cache["error"] = str(e)
+        # Fall back to DB if API fails
+        db_matches = db.load_matches()
+        if db_matches:
+            categorized = categorize(db_matches)
+            stats = _compute_stats(db_matches)
+            all_ids = [m["id"] for m in db_matches]
+            all_events = _load_events_from_db(all_ids)
+            with _cache_lock:
+                _cache = {
+                    "matches": db_matches,
+                    "finished": categorized["finished"],
+                    "upcoming": categorized["upcoming"],
+                    "live": categorized["live"],
+                    "stats": stats,
+                    "all_events": all_events,
+                    "last_updated": datetime.now(timezone.utc).isoformat(),
+                    "error": None,
+                }
+        else:
+            with _cache_lock:
+                _cache["error"] = str(e)
 
 
 @app.route("/")
@@ -196,26 +243,31 @@ def api_matches():
     with _cache_lock:
         needs_refresh = _cache["last_updated"] is None or (
             datetime.now(timezone.utc) - datetime.fromisoformat(_cache["last_updated"])
-        ).total_seconds() >= CACHE_TTL_SECONDS
+        ).total_seconds() >= CACHE_TTL
 
     if needs_refresh:
         refresh_cache()
 
     with _cache_lock:
-        # Attach events to matches
-        def attach_events(matches):
+        events = _cache.get("all_events", {})
+
+        def attach(matches):
             result = []
             for m in (matches or []):
                 m = dict(m)
-                m["events"] = _events_cache.get(str(m["id"]), {})
+                m["events"] = events.get(m["id"], {})
+                # Determine home/away for Barcelona
+                is_barca_home = m.get("home_team") in ("Barça", "Barcelona")
+                m["is_home"] = is_barca_home
+                m["stadium_name"] = m.get("venue", "") if is_barca_home else ""
                 result.append(m)
             return result
 
         return jsonify({
             "last_updated": _cache["last_updated"],
-            "finished": attach_events(_cache.get("finished", [])),
-            "upcoming": attach_events(_cache.get("upcoming", [])),
-            "live": attach_events(_cache.get("live", [])),
+            "finished": attach(_cache.get("finished", [])),
+            "upcoming": attach(_cache.get("upcoming", [])),
+            "live": attach(_cache.get("live", [])),
             "stats": _cache.get("stats", {}),
             "error": _cache.get("error"),
         })
@@ -224,22 +276,15 @@ def api_matches():
 @app.route("/api/match/<int:match_id>/events")
 def api_match_events(match_id):
     """Fetch events for a specific match on-demand."""
-    mid = str(match_id)
+    existing = db.load_events(match_id)
+    if existing and existing.get("found"):
+        return jsonify({"events": existing, "cached": True})
 
-    # Check cache
-    with _cache_lock:
-        cached = _events_cache.get(mid)
-        last = _events_last_fetched.get(mid)
-        now = datetime.now(timezone.utc)
-        if cached and last and (now - last).total_seconds() < EVENTS_TTL_SECONDS:
-            return jsonify({"events": cached, "cached": True})
-
-    # Find the match in our data
     with _cache_lock:
         all_matches = _cache.get("matches", [])
     match_data = None
     for m in all_matches:
-        if str(m["id"]) == mid:
+        if m["id"] == match_id:
             match_data = m
             break
 
@@ -254,12 +299,12 @@ def api_match_events(match_id):
             match_date=match_data.get("date", ""),
         )
         if events.get("found"):
-            result = {"goals": events["goals"], "cards": events["cards"]}
+            result = {"goals": events["goals"], "cards": events["cards"], "found": True}
+            db.save_events(match_id, result)
             with _cache_lock:
-                _events_cache[mid] = result
-                _events_last_fetched[mid] = now
+                _cache["all_events"][match_id] = result
             return jsonify({"events": result, "cached": False})
-        return jsonify({"events": {"goals": [], "cards": []}, "found": False})
+        return jsonify({"events": {"goals": [], "cards": [], "found": False}})
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
@@ -269,6 +314,61 @@ def api_refresh():
     refresh_cache()
     with _cache_lock:
         return jsonify({"last_updated": _cache["last_updated"], "error": _cache.get("error")})
+
+
+@app.route("/api/transfers")
+def api_transfers():
+    """Return categorized transfer news from DB/cache."""
+    if not db.is_transfer_news_stale():
+        articles = db.load_transfer_articles()
+    else:
+        articles = transfer_news.fetch_transfer_news()
+        if articles:
+            db.upsert_transfer_articles(articles)
+
+    categories = {"in": [], "rumor": [], "out": []}
+    for a in articles:
+        cat = a.get("category", "rumor")
+        if cat in categories:
+            categories[cat].append({
+                "id": a["id"],
+                "title": a["title"],
+                "link": a["link"],
+                "source": a["source"],
+                "published": a.get("published", ""),
+                "players": a.get("players", "").split(",") if a.get("players") else [],
+            })
+
+    return jsonify({"categories": categories, "stale": db.is_transfer_news_stale()})
+
+
+@app.route("/api/stadium-image")
+def api_stadium_image():
+    """Get stadium image for a given venue name."""
+    name = request.args.get("name", "").strip()
+    if not name:
+        return jsonify({"error": "Missing name"}), 400
+
+    # Check DB
+    cached = db.load_stadium(name)
+    if cached:
+        return jsonify(cached)
+
+    # Fetch from Wikipedia
+    result = stadium_module.get_stadium_image(name)
+    if result:
+        db.save_stadium(name, result["image_path"], result.get("attribution", ""))
+        return jsonify(result)
+
+    return jsonify({"image_path": None, "error": "Not found"})
+
+
+@app.route("/api/transfer-refresh", methods=["POST"])
+def api_transfer_refresh():
+    articles = transfer_news.fetch_transfer_news()
+    if articles:
+        db.upsert_transfer_articles(articles)
+    return jsonify({"count": len(articles)})
 
 
 if __name__ == "__main__":
