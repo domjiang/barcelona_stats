@@ -239,6 +239,27 @@ def index():
     return render_template("index.html")
 
 
+@app.route("/test-images")
+def test_images():
+    import os
+    images = []
+    stadiums_dir = os.path.join(os.path.dirname(__file__), "static", "stadiums")
+    names = ["Spotify Camp Nou", "Estadio Santiago Bernabéu", "Mestalla Stadium",
+             "Estadio Metropolitano", "Anoeta Stadium", "Stamford Bridge",
+             "Estadio de la Cerámica", "San Mamés"]
+    for name in names:
+        from venues import get_venue as gv
+        safe = name.lower().replace(" ", "_").replace("ñ", "n").replace("á", "a").replace("é", "e").replace("í", "i").replace("ó", "o").replace("ú", "u")
+        path = f"/static/stadiums/{safe}.jpg"
+        full = os.path.join(stadiums_dir, f"{safe}.jpg")
+        images.append({
+            "label": name,
+            "path": path,
+            "exists": os.path.exists(full),
+        })
+    return render_template("test_stadium.html", images=images)
+
+
 @app.route("/api/matches")
 def api_matches():
     with _cache_lock:

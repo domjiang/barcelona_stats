@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>Stadium Image Test</title>
+<style>
+body { background:#0f0f1a; color:#e0e0e0; font-family:sans-serif; padding:40px; }
+img { max-width:600px; border:3px solid #CDB034; border-radius:8px; margin:10px 0; }
+h2 { color:#CDB034; }
+.pass { color:#2ecc71; }
+.fail { color:#e74c3c; }
+.card { background:#1a1a2e; padding:20px; border-radius:10px; margin:10px 0; }
+</style></head>
+<body>
+<h1>Stadium & Emblem Image Test</h1>
+
+{% for item in images %}
+<div class="card">
+    <h2>{{ item.label }}</h2>
+    <p>Path: <code>{{ item.path }}</code></p>
+    {% if item.exists %}
+        <p class="pass">File exists on disk</p>
+        <p>URL: <a href="{{ item.path }}" target="_blank" style="color:#CDB034">{{ item.path }}</a></p>
+        <img src="{{ item.path }}" alt="{{ item.label }}" onerror="this.nextElementSibling.textContent='BROWSER FAILED TO LOAD'">
+        <p></p>
+    {% else %}
+        <p class="fail">File MISSING on disk</p>
+    {% endif %}
+</div>
+{% endfor %}
+
+<h2>CL Emblem Test</h2>
+<div class="card">
+    <p>URL: https://crests.football-data.org/CL.png</p>
+    <img src="https://crests.football-data.org/CL.png" alt="CL" onerror="this.nextElementSibling.textContent='BROWSER FAILED'">
+    <p></p>
+</div>
+
+<h2>La Liga Emblem Test</h2>
+<div class="card">
+    <p>URL: https://crests.football-data.org/laliga.png</p>
+    <img src="https://crests.football-data.org/laliga.png" alt="La Liga" onerror="this.nextElementSibling.textContent='BROWSER FAILED'">
+    <p></p>
+</div>
+
+<h2>Team Crest Test</h2>
+<div class="card">
+    <p>URL: https://crests.football-data.org/81.svg</p>
+    <img src="https://crests.football-data.org/81.svg" alt="Barca" style="width:100px" onerror="this.nextElementSibling.textContent='BROWSER FAILED'">
+    <p></p>
+</div>
+</body>
+</html>
