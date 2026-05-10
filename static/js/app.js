@@ -140,7 +140,7 @@ function renderMatchCard(m) {
         ? '<span class="venue-badge home">HOME</span>'
         : '<span class="venue-badge away">AWAY</span>';
 
-    const venueName = m.venue || "";
+    const venueName = m.stadium_name || "";
     const venueText = venueName ? ` — ${venueName}` : "";
 
     // Stadium image row (embedded from server)
