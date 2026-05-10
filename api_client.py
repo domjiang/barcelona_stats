@@ -3,6 +3,9 @@
 import os
 import requests
 from datetime import datetime, timezone
+from dotenv import load_dotenv
+
+load_dotenv()
 
 BASE_URL = "https://api.football-data.org/v4"
 BARCA_TEAM_ID = 81
