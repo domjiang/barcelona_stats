@@ -1,14 +1,14 @@
 """Flask web app — FC Barcelona 2025/26 season match dashboard."""
 
-import os
 import threading
 import time
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 from flask import Flask, jsonify, render_template, request
 from dotenv import load_dotenv
 
 from api_client import FootballDataAPI
+from espn_client import get_match_events
 
 load_dotenv()
 
@@ -20,8 +20,12 @@ _cache: dict = {
     "last_updated": None,
     "error": None,
 }
+# { match_id: { "goals": [...], "cards": [...] } }
+_events_cache: dict = {}
+_events_last_fetched: dict[str, datetime] = {}
 _cache_lock = threading.Lock()
 CACHE_TTL_SECONDS = 5 * 60  # 5 minutes
+EVENTS_TTL_SECONDS = 60 * 60  # 1 hour for events
 
 
 def _compute_stats(matches: list[dict]) -> dict:
@@ -44,7 +48,6 @@ def _compute_stats(matches: list[dict]) -> dict:
     )
     points = wins * 3 + draws
 
-    # Competition breakdown
     competitions = {}
     for m in finished:
         comp = m.get("competition", "Unknown")
@@ -63,7 +66,6 @@ def _compute_stats(matches: list[dict]) -> dict:
         else:
             c["losses"] += 1
 
-    # Match-by-match for line charts
     timeline = []
     cum_points = 0
     for m in sorted(finished, key=lambda x: x["date"]):
@@ -111,6 +113,54 @@ def categorize(matches: list[dict]) -> dict:
     return {"live": live, "finished": finished, "upcoming": upcoming}
 
 
+def _enrich_with_events(matches: list[dict]):
+    """Fetch ESPN events for recent/live matches in background."""
+    global _events_cache, _events_last_fetched
+    thirty_days_ago = datetime.now(timezone.utc) - timedelta(days=30)
+    now = datetime.now(timezone.utc)
+
+    for m in matches:
+        mid = str(m["id"])
+
+        # Skip if recently fetched
+        with _cache_lock:
+            last = _events_last_fetched.get(mid)
+            if last and (now - last).total_seconds() < EVENTS_TTL_SECONDS:
+                continue
+
+        # Only fetch for: live matches, finished within 30 days, or upcoming within 3 days
+        status = m["status"]
+        try:
+            mdate = datetime.fromisoformat(m["date"].replace("Z", "+00:00"))
+        except (ValueError, AttributeError):
+            mdate = None
+
+        should_fetch = (
+            status in ("IN_PLAY", "PAUSED")
+            or (status == "FINISHED" and mdate and mdate > thirty_days_ago)
+            or (mdate and mdate > now and mdate - now < timedelta(days=3))
+        )
+
+        if not should_fetch:
+            continue
+
+        try:
+            events = get_match_events(
+                competition=m.get("competition", ""),
+                home_team=m.get("home_team", ""),
+                away_team=m.get("away_team", ""),
+                match_date=m.get("date", ""),
+            )
+            if events.get("found"):
+                with _cache_lock:
+                    _events_cache[mid] = {"goals": events["goals"], "cards": events["cards"]}
+                    _events_last_fetched[mid] = now
+        except Exception:
+            pass  # Silently skip ESPN failures
+
+        time.sleep(3)  # Be gentle with ESPN's API
+
+
 def refresh_cache():
     global _cache
     try:
@@ -128,19 +178,12 @@ def refresh_cache():
                 "last_updated": datetime.now(timezone.utc).isoformat(),
                 "error": None,
             }
+        # Start background thread to fetch events
+        t = threading.Thread(target=_enrich_with_events, args=(matches,), daemon=True)
+        t.start()
     except Exception as e:
         with _cache_lock:
             _cache["error"] = str(e)
-
-
-def get_cached_data() -> dict:
-    with _cache_lock:
-        if _cache["last_updated"] is None:
-            return _cache  # triggers refresh below
-        age = (datetime.now(timezone.utc) - datetime.fromisoformat(_cache["last_updated"])).total_seconds()
-        if age < CACHE_TTL_SECONDS:
-            return _cache
-    return _cache  # will have stale flag checked below
 
 
 @app.route("/")
@@ -159,14 +202,66 @@ def api_matches():
         refresh_cache()
 
     with _cache_lock:
+        # Attach events to matches
+        def attach_events(matches):
+            result = []
+            for m in (matches or []):
+                m = dict(m)
+                m["events"] = _events_cache.get(str(m["id"]), {})
+                result.append(m)
+            return result
+
         return jsonify({
             "last_updated": _cache["last_updated"],
-            "finished": _cache.get("finished", []),
-            "upcoming": _cache.get("upcoming", []),
-            "live": _cache.get("live", []),
+            "finished": attach_events(_cache.get("finished", [])),
+            "upcoming": attach_events(_cache.get("upcoming", [])),
+            "live": attach_events(_cache.get("live", [])),
             "stats": _cache.get("stats", {}),
             "error": _cache.get("error"),
         })
+
+
+@app.route("/api/match/<int:match_id>/events")
+def api_match_events(match_id):
+    """Fetch events for a specific match on-demand."""
+    mid = str(match_id)
+
+    # Check cache
+    with _cache_lock:
+        cached = _events_cache.get(mid)
+        last = _events_last_fetched.get(mid)
+        now = datetime.now(timezone.utc)
+        if cached and last and (now - last).total_seconds() < EVENTS_TTL_SECONDS:
+            return jsonify({"events": cached, "cached": True})
+
+    # Find the match in our data
+    with _cache_lock:
+        all_matches = _cache.get("matches", [])
+    match_data = None
+    for m in all_matches:
+        if str(m["id"]) == mid:
+            match_data = m
+            break
+
+    if not match_data:
+        return jsonify({"error": "Match not found"}), 404
+
+    try:
+        events = get_match_events(
+            competition=match_data.get("competition", ""),
+            home_team=match_data.get("home_team", ""),
+            away_team=match_data.get("away_team", ""),
+            match_date=match_data.get("date", ""),
+        )
+        if events.get("found"):
+            result = {"goals": events["goals"], "cards": events["cards"]}
+            with _cache_lock:
+                _events_cache[mid] = result
+                _events_last_fetched[mid] = now
+            return jsonify({"events": result, "cached": False})
+        return jsonify({"events": {"goals": [], "cards": []}, "found": False})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/refresh", methods=["POST"])

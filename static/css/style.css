@@ -164,6 +164,52 @@ header h1 { font-size: 1.5rem; font-weight: 700; letter-spacing: 0.5px; }
 .badge-live { background: rgba(255,0,0,0.2); color: var(--live); animation: pulse 2s ease-in-out infinite; }
 .badge-upcoming { background: rgba(255,255,255,0.08); color: var(--text-muted); }
 
+/* ===== Match Events ===== */
+.match-events {
+    grid-column: 1 / -1;
+    border-top: 1px solid var(--surface2);
+    padding-top: 10px;
+    margin-top: 6px;
+    font-size: 0.8rem;
+}
+.events-row {
+    display: flex;
+    gap: 16px;
+    margin-bottom: 6px;
+    flex-wrap: wrap;
+}
+.cards-row { margin-bottom: 0; }
+.event-list {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+}
+.event-list.opp { margin-left: auto; }
+.event-item {
+    padding: 2px 8px;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    white-space: nowrap;
+}
+.goal-barca { background: rgba(46,204,113,0.15); color: var(--win); }
+.goal-opp { background: rgba(231,76,60,0.12); color: var(--loss); }
+.card-yellow { background: rgba(243,156,18,0.15); color: var(--draw); }
+.card-red { background: rgba(231,76,60,0.2); color: var(--loss); font-weight: 700; }
+
+.btn-load-events {
+    background: var(--surface2);
+    border: 1px dashed var(--text-muted);
+    color: var(--text-muted);
+    padding: 4px 12px;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 0.72rem;
+    transition: all 0.2s;
+}
+.btn-load-events:hover { border-color: var(--barca-gold); color: var(--barca-gold); }
+.btn-load-events.no-data { border-color: transparent; background: none; cursor: default; color: #555; }
+
 /* ===== Charts ===== */
 .charts-grid {
     display: grid;

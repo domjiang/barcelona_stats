@@ -2,7 +2,6 @@
 
 const REFRESH_MS = 5 * 60 * 1000;
 let charts = {};
-let currentTab = "all";
 
 // ===== Init =====
 document.addEventListener("DOMContentLoaded", () => {
@@ -38,7 +37,6 @@ function setupTabs() {
             const target = "tab-" + tab.dataset.tab;
             const el = document.getElementById(target);
             if (el) el.classList.remove("hidden");
-            currentTab = tab.dataset.tab;
         });
     });
 }
@@ -79,12 +77,6 @@ function render(data) {
     document.getElementById("tab-finished").innerHTML = renderMatchList(data.finished || []);
     document.getElementById("tab-upcoming").innerHTML = renderMatchList(data.upcoming || []);
     document.getElementById("tab-live").innerHTML = renderMatchList(data.live || []);
-    document.getElementById("tab-live").classList.toggle("hidden", liveCountNum === 0);
-
-    // Auto-switch to LIVE tab if there are live matches and user isn't viewing charts
-    if (liveCountNum > 0) {
-        document.getElementById("tab-live").classList.remove("hidden");
-    }
 
     // Charts
     renderCharts(data);
@@ -106,7 +98,7 @@ function renderMatchCard(m) {
 
     let badge = "";
     if (isLive) {
-        badge = '<span class="match-badge badge-live">● LIVE ' + (status === "PAUSED" ? "(Paused)" : "") + "</span>";
+        badge = '<span class="match-badge badge-live">LIVE ' + (status === "PAUSED" ? "(Paused)" : "") + "</span>";
     } else if (isFinished) {
         const won = (m.winner === "HOME_TEAM" && isBarcaHome) || (m.winner === "AWAY_TEAM" && !isBarcaHome);
         const draw = m.winner === "DRAW";
@@ -137,13 +129,16 @@ function renderMatchCard(m) {
             </div>`;
     }
 
-    const venue = m.venue ? `<br>📍 ${m.venue}` : "";
+    const venue = m.venue ? `<br> ${m.venue}` : "";
+
+    // Events: goals + cards
+    const eventsHtml = renderEvents(m);
 
     return `
         <div class="match-card status-${status}">
             <div class="match-meta">
                 <span class="competition">${m.competition}</span>
-                <span class="date">${isLive ? "⚡ NOW" : m.date_display}${venue}</span>
+                <span class="date">${isLive ? "NOW" : m.date_display}${venue}</span>
                 ${m.matchday ? '<span class="date">Matchday ' + m.matchday + "</span>" : ""}
             </div>
             <div class="match-teams">
@@ -158,7 +153,104 @@ function renderMatchCard(m) {
                 </div>
             </div>
             ${badge}
+            ${eventsHtml}
         </div>`;
+}
+
+function renderEvents(m) {
+    const ev = m.events || {};
+    const goals = ev.goals || [];
+    const cards = ev.cards || [];
+
+    if (goals.length === 0 && cards.length === 0) {
+        // Show load button for finished/live matches without events
+        if (m.status === "FINISHED" || m.status === "IN_PLAY" || m.status === "PAUSED") {
+            return `
+                <div class="match-events">
+                    <button class="btn-load-events" data-match-id="${m.id}" onclick="loadMatchEvents(this, ${m.id})">
+                        Load details
+                    </button>
+                </div>`;
+        }
+        return "";
+    }
+
+    // Separate goals for/against Barça
+    const barcaGoals = goals.filter(g => g.is_barca);
+    const oppGoals = goals.filter(g => !g.is_barca);
+    const barcaCards = cards.filter(c => c.is_barca);
+    const oppCards = cards.filter(c => !c.is_barca);
+
+    let html = '<div class="match-events">';
+
+    // Goals section
+    if (goals.length > 0) {
+        html += '<div class="events-row">';
+        // Our goals
+        if (barcaGoals.length > 0) {
+            html += '<div class="event-list goals">';
+            barcaGoals.forEach(g => {
+                const icon = g.type === "PENALTY" ? "" : "";
+                html += `<span class="event-item goal-barca" title="${g.scorer}">${g.minute}' ${g.scorer}${icon}</span>`;
+            });
+            html += '</div>';
+        }
+        // Their goals
+        if (oppGoals.length > 0) {
+            html += '<div class="event-list goals opp">';
+            oppGoals.forEach(g => {
+                html += `<span class="event-item goal-opp" title="${g.scorer}">${g.minute}' ${g.scorer}</span>`;
+            });
+            html += '</div>';
+        }
+        html += '</div>';
+    }
+
+    // Cards section
+    if (cards.length > 0) {
+        html += '<div class="events-row cards-row">';
+        if (barcaCards.length > 0) {
+            html += '<div class="event-list">';
+            barcaCards.forEach(c => {
+                const cls = c.card === "RED" ? "card-red" : "card-yellow";
+                const icon = c.card === "RED" ? "" : "";
+                html += `<span class="event-item ${cls}">${c.minute}' ${c.player}${icon}</span>`;
+            });
+            html += '</div>';
+        }
+        if (oppCards.length > 0) {
+            html += '<div class="event-list">';
+            oppCards.forEach(c => {
+                const cls = c.card === "RED" ? "card-red" : "card-yellow";
+                const icon = c.card === "RED" ? "" : "";
+                html += `<span class="event-item ${cls}">${c.minute}' ${c.player}${icon}</span>`;
+            });
+            html += '</div>';
+        }
+        html += '</div>';
+    }
+
+    html += '</div>';
+    return html;
+}
+
+async function loadMatchEvents(btn, matchId) {
+    btn.textContent = "Loading...";
+    btn.disabled = true;
+    try {
+        const resp = await fetch(`/api/match/${matchId}/events`);
+        const data = await resp.json();
+        if (data.events && (data.events.goals.length > 0 || data.events.cards.length > 0)) {
+            // Refresh the whole view to show events
+            fetchAndRender();
+        } else {
+            btn.textContent = "No details";
+            btn.classList.add("no-data");
+        }
+    } catch {
+        btn.textContent = "Error - retry";
+        btn.disabled = false;
+    }
 }
 
 // ===== Charts =====
@@ -178,7 +270,7 @@ function renderCharts(data) {
                 datasets: [{
                     data: [st.wins || 0, st.draws || 0, st.losses || 0],
                     backgroundColor: ["#2ecc71", "#f39c12", "#e74c3c"],
-                    borderColor: "var(--bg)",
+                    borderColor: "#1a1a2e",
                     borderWidth: 2,
                 }]
             },
